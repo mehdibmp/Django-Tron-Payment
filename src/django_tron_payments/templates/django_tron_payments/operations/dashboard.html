@@ -1,0 +1,164 @@
+{% extends "admin/base_site.html" %}
+{% load static %}
+
+{% block extrastyle %}
+{{ block.super }}
+<link rel="stylesheet" href="{% static 'django_tron_payments/admin/tron_payments.css' %}">
+{% endblock %}
+
+{% block breadcrumbs %}
+<div class="breadcrumbs">
+    <a href="{% url 'admin:index' %}">Home</a>
+    &rsaquo; TRON payment operations
+</div>
+{% endblock %}
+
+{% block content %}
+<div class="tron-operations">
+    <header class="tron-operations__header">
+        <div>
+            <p class="tron-eyebrow">Custodial payments</p>
+            <h1>TRON payment operations</h1>
+            <p class="tron-operations__summary">
+                {{ configured.network|upper }} network &middot; Treasury
+                <code>{{ configured.treasury_address }}</code>
+            </p>
+        </div>
+        <div class="tron-status" aria-label="Active network">
+            <span class="tron-status__dot" aria-hidden="true"></span>
+            {{ configured.network|upper }} configured
+        </div>
+    </header>
+
+    <section class="tron-metrics" aria-label="Payment overview">
+        <article class="tron-metric">
+            <span class="tron-metric__label">Managed wallets</span>
+            <strong>{{ wallet_count }}</strong>
+            <a href="{% url 'admin:django_tron_payments_managedwallet_changelist' %}">View wallets</a>
+        </article>
+        <article class="tron-metric">
+            <span class="tron-metric__label">Confirmed deposits</span>
+            <strong>{{ confirmed_payment_count }}</strong>
+            <span>{{ confirmed_payment_total }} total atomic units</span>
+        </article>
+        <article class="tron-metric">
+            <span class="tron-metric__label">Open sweep operations</span>
+            <strong>{{ pending_sweep_count }}</strong>
+            <a href="{% url 'admin:django_tron_payments_treasurysweep_changelist' %}">Review sweeps</a>
+        </article>
+        <article class="tron-metric tron-metric--attention">
+            <span class="tron-metric__label">Needs review</span>
+            <strong>{{ failed_sweep_count|add:stale_broadcast_count }}</strong>
+            <span>{{ failed_sweep_count }} failed &middot; {{ stale_broadcast_count }} delayed</span>
+        </article>
+    </section>
+
+    <section class="tron-panel" aria-labelledby="operations-heading">
+        <div class="tron-panel__heading">
+            <div>
+                <p class="tron-eyebrow">Runbook</p>
+                <h2 id="operations-heading">Network operations</h2>
+            </div>
+            <p>All actions run asynchronously through Celery. A broadcast is not treated as settled until its confirmed receipt is recorded.</p>
+        </div>
+        <div class="tron-actions">
+            <form method="post" action="{% url 'django_tron_payments:run-operation' 'reconcile' %}">
+                {% csrf_token %}
+                <button type="submit" class="button">Reconcile confirmed deposits</button>
+                <span>Query confirmed incoming TRX and configured tokens.</span>
+            </form>
+            <form method="post" action="{% url 'django_tron_payments:run-operation' 'queue-sweeps' %}">
+                {% csrf_token %}
+                <button type="submit" class="button">Plan eligible sweeps</button>
+                <span>Queue balances that preserve the configured fee reserve.</span>
+            </form>
+            <form method="post" action="{% url 'django_tron_payments:run-operation' 'broadcast-sweeps' %}">
+                {% csrf_token %}
+                <button type="submit" class="button">Broadcast queued sweeps</button>
+                <span>Sign locally and submit each planned transfer once.</span>
+            </form>
+            <form method="post" action="{% url 'django_tron_payments:run-operation' 'confirm-sweeps' %}">
+                {% csrf_token %}
+                <button type="submit" class="button button-default">Check sweep receipts</button>
+                <span>Finalize only successful confirmed receipts.</span>
+            </form>
+        </div>
+    </section>
+
+    <div class="tron-columns">
+        <section class="tron-panel" aria-labelledby="asset-heading">
+            <div class="tron-panel__heading">
+                <div>
+                    <p class="tron-eyebrow">Deposits</p>
+                    <h2 id="asset-heading">Confirmed asset activity</h2>
+                </div>
+                <a href="{% url 'admin:django_tron_payments_incomingpayment_changelist' %}">All payments</a>
+            </div>
+            <div class="tron-table-wrap">
+                <table>
+                    <thead>
+                        <tr><th>Asset</th><th>Transfers</th><th>Total (atomic)</th></tr>
+                    </thead>
+                    <tbody>
+                        {% for asset in asset_summary %}
+                        <tr><td>{{ asset.asset_code }}</td><td>{{ asset.count }}</td><td>{{ asset.total }}</td></tr>
+                        {% empty %}
+                        <tr><td colspan="3" class="tron-empty">No confirmed transfers have been recorded on this network.</td></tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </section>
+
+        <section class="tron-panel" aria-labelledby="sweeps-heading">
+            <div class="tron-panel__heading">
+                <div>
+                    <p class="tron-eyebrow">Treasury</p>
+                    <h2 id="sweeps-heading">Recent sweeps</h2>
+                </div>
+                <a href="{% url 'admin:django_tron_payments_treasurysweep_changelist' %}">All sweeps</a>
+            </div>
+            <ul class="tron-activity-list">
+                {% for sweep in recent_sweeps %}
+                <li>
+                    <div><strong>{{ sweep.asset_code }} {{ sweep.amount_atomic }}</strong><span>{{ sweep.wallet.address }}</span></div>
+                    <span class="tron-badge tron-badge--{{ sweep.status }}">{{ sweep.get_status_display }}</span>
+                </li>
+                {% empty %}
+                <li class="tron-empty">No treasury sweep activity yet.</li>
+                {% endfor %}
+            </ul>
+        </section>
+    </div>
+
+    <section class="tron-panel" aria-labelledby="payments-heading">
+        <div class="tron-panel__heading">
+            <div>
+                <p class="tron-eyebrow">Ledger</p>
+                <h2 id="payments-heading">Latest confirmed payments</h2>
+            </div>
+            <a href="{% url 'admin:django_tron_payments_incomingpayment_changelist' %}">Open payment ledger</a>
+        </div>
+        <div class="tron-table-wrap">
+            <table>
+                <thead>
+                    <tr><th>Received</th><th>Asset</th><th>Amount (atomic)</th><th>Wallet</th><th>Transaction</th></tr>
+                </thead>
+                <tbody>
+                    {% for payment in recent_payments %}
+                    <tr>
+                        <td>{{ payment.confirmed_at|date:"Y-m-d H:i" }}</td>
+                        <td>{{ payment.asset_code }}</td>
+                        <td>{{ payment.amount_atomic }}</td>
+                        <td><code>{{ payment.wallet.address }}</code></td>
+                        <td><code>{{ payment.transaction_id|slice:":16" }}</code></td>
+                    </tr>
+                    {% empty %}
+                    <tr><td colspan="5" class="tron-empty">No confirmed payments have been recorded on this network.</td></tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </section>
+</div>
+{% endblock %}

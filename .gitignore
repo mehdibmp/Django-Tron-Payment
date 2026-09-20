@@ -1,0 +1,28 @@
+# Python bytecode and test artifacts
+__pycache__/
+*.py[cod]
+*.so
+.pytest_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# Packaging and virtual environments
+build/
+dist/
+*.egg-info/
+.venv/
+venv/
+.env
+.env.*
+
+# Django and Celery local state
+*.sqlite3
+celerybeat-schedule
+celerybeat.pid
+
+# Editors and operating systems
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
