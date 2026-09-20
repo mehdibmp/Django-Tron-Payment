@@ -59,13 +59,12 @@ class TronGridClient:
         )
         return self._parse_trc20_transfers(address, asset, payload)
 
-    def transaction_confirmed(self, transaction_id: str, isTRX=False) -> bool:
+    def transaction_confirmed(self, transaction_id: str) -> bool:
         """Check a SolidityNode-backed transaction receipt before finalizing state."""
         response = self._post(
             "/walletsolidity/gettransactionbyid", {"value": transaction_id}
         )
-        print(response)
-        return bool(response.get("id")) and response.get("receipt", {}).get("result") == "SUCCESS"
+        return len(response.get('ret', [])) > 0 and response.get('ret', [])[0]['contractRet'] == "SUCCESS"
 
     def get_trx_balance_sun(self, address: str) -> int:
         """Return native TRX balance in SUN, without using float conversions."""
