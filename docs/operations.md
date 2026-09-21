@@ -31,13 +31,27 @@ Review **TRON payment operations** in Django admin:
 | `confirmed` | A confirmed successful network receipt was observed. | No action needed. |
 | `failed` | Signing or pre-broadcast preparation failed without a persisted transaction ID. | Correct the underlying issue, verify source funds, then use a controlled retry procedure. |
 
+## TRX fee readiness and skipped token sweeps
+
+During the queue stage, every configured TRC-20 asset is checked against the source wallet's current TRX balance. The package compares that balance in SUN with `TRC20_FEE_LIMIT_SUN` before reading the token balance or creating a `TreasurySweep` record.
+
+When the wallet does not have enough TRX for the configured fee limit:
+
+- the token sweep is not placed in the queue;
+- no token transfer is signed or broadcast;
+- one idempotent `sweep.skipped` audit event is recorded for the current wallet, asset, balance, and threshold;
+- the event metadata includes `reason=insufficient_trx_for_fee`, `trx_balance_sun`, and `required_trx_sun`;
+- the operations dashboard and Payment audit events admin page show the reason and values.
+
+The native TRX sweep is evaluated separately and still respects `TRX_SWEEP_RESERVE_SUN`. After deliberately funding the wallet, run the queue stage again. A token sweep can then be created only if its token balance also meets `MINIMUM_DEPOSIT_ATOMIC`.
+
 ## Ambiguous broadcast recovery
 
 A worker or network timeout after a signed transaction can leave a sweep in `building`. This is deliberate: the package retains the locally determined transaction ID and will not automatically sign a replacement transaction.
 
 1. Open the sweep in admin and copy the transaction ID.
 2. Inspect its confirmed state through your trusted TRON explorer/API.
-3. Run `python manage.py sweep_tron --confirm` or queue receipt confirmation from the operations console.
+3. Run `python manage.py sweep_tron confirm` or queue receipt confirmation from the operations console.
 4. If the transaction is confirmed, allow the receipt task to mark it `confirmed`.
 5. If it is definitively absent after the network expiration window, document the evidence, have a second operator review it, and only then create an explicit recovery process under your organization’s custody policy.
 
@@ -45,12 +59,14 @@ A worker or network timeout after a signed transaction can leave a sweep in `bui
 
 ```bash
 python manage.py reconcile_tron
-python manage.py sweep_tron --queue
-python manage.py sweep_tron --broadcast
-python manage.py sweep_tron --confirm
+python manage.py sweep_tron queue
+python manage.py sweep_tron broadcast
+python manage.py sweep_tron confirm
+# Or run all three sweep stages sequentially:
+python manage.py sweep_tron all
 ```
 
-Manual commands are operational fallbacks, not a replacement for Celery Beat.
+Manual commands are operational fallbacks, not a replacement for Celery Beat. Run them from a controlled deployment environment and verify the active network before starting a transfer lifecycle.
 
 ## Incident response
 

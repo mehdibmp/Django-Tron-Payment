@@ -8,7 +8,7 @@ from django.utils import timezone
 from django_tron_payments.clients.trongrid import TronGridClient
 from django_tron_payments.conf import PaymentAsset, get_tron_settings
 from django_tron_payments.constants import ACTIVE_SWEEP_STATUSES, SweepStatus
-from django_tron_payments.models import ManagedWallet, TreasurySweep
+from django_tron_payments.models import ManagedWallet, PaymentAuditEvent, TreasurySweep
 from django_tron_payments.services.audit import record_event
 from django_tron_payments.services.signing import broadcast_transfer
 
@@ -20,8 +20,22 @@ def queue_sweeps() -> int:
     queued = 0
     wallets = ManagedWallet.objects.filter(network=configured.network, status="active")
     for wallet in wallets.iterator():
+        trx_balance_sun = client.get_trx_balance_sun(wallet.address)
         for asset in configured.assets:
-            amount = _available_amount(client, wallet, asset)
+            if asset.kind.upper() == "TRC20" and trx_balance_sun < configured.trc20_fee_limit_sun:
+                _record_insufficient_trx_event(
+                    wallet=wallet,
+                    asset=asset,
+                    trx_balance_sun=trx_balance_sun,
+                    required_trx_sun=configured.trc20_fee_limit_sun,
+                )
+                continue
+            amount = _available_amount(
+                client,
+                wallet,
+                asset,
+                trx_balance_sun=trx_balance_sun,
+            )
             if amount < asset.minimum_deposit_atomic:
                 continue
             _, created = _create_sweep(wallet, asset, amount)
@@ -69,10 +83,22 @@ def confirm_broadcast_sweeps() -> int:
     return count
 
 
-def _available_amount(client: TronGridClient, wallet: ManagedWallet, asset: PaymentAsset) -> int:
+def _available_amount(
+    client: TronGridClient,
+    wallet: ManagedWallet,
+    asset: PaymentAsset,
+    *,
+    trx_balance_sun: int | None = None,
+) -> int:
+    configured = get_tron_settings()
+    if trx_balance_sun is None:
+        trx_balance_sun = client.get_trx_balance_sun(wallet.address)
     if asset.kind.upper() == "TRX":
-        return max(client.get_trx_balance_sun(wallet.address) - get_tron_settings().trx_sweep_reserve_sun, 0)
-    if client.get_trx_balance_sun(wallet.address) < get_tron_settings().trc20_fee_limit_sun:
+        reserve_sun = configured.trx_sweep_reserve_sun
+        if any(configured_asset.kind.upper() == "TRC20" for configured_asset in configured.assets):
+            reserve_sun = max(reserve_sun, configured.trc20_fee_limit_sun)
+        return max(trx_balance_sun - reserve_sun, 0)
+    if trx_balance_sun < configured.trc20_fee_limit_sun:
         return 0
     return client.get_trc20_balance(wallet.address, asset)
 
@@ -96,6 +122,43 @@ def _create_sweep(wallet: ManagedWallet, asset: PaymentAsset, amount: int):
             amount_atomic=amount,
             fee_limit_sun=get_tron_settings().trc20_fee_limit_sun if asset.kind == "TRC20" else 0,
         ), True
+
+
+def _record_insufficient_trx_event(
+    *,
+    wallet: ManagedWallet,
+    asset: PaymentAsset,
+    trx_balance_sun: int,
+    required_trx_sun: int,
+) -> PaymentAuditEvent:
+    metadata = {
+        "network": wallet.network,
+        "asset_code": asset.code,
+        "reason": "insufficient_trx_for_fee",
+        "trx_balance_sun": trx_balance_sun,
+        "required_trx_sun": required_trx_sun,
+    }
+    latest_event = (
+        PaymentAuditEvent.objects.filter(
+            wallet=wallet,
+            event_type="sweep.skipped",
+            metadata__asset_code=asset.code,
+        )
+        .order_by("-created_at")
+        .first()
+    )
+    if latest_event is not None and latest_event.metadata == metadata:
+        return latest_event
+    return record_event(
+        event_type="sweep.skipped",
+        message=(
+            f"Skipped the {asset.code} sweep because the wallet has "
+            f"{trx_balance_sun} SUN TRX, below the "
+            f"{required_trx_sun} SUN fee requirement."
+        ),
+        wallet=wallet,
+        **metadata,
+    )
 
 
 def _broadcast_sweep(sweep_id) -> bool:

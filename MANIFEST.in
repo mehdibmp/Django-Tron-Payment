@@ -3,3 +3,4 @@ include README.md
 include CHANGELOG.md
 recursive-include src/django_tron_payments/templates *
 recursive-include src/django_tron_payments/static *
+recursive-include docs *.md

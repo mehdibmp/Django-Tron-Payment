@@ -84,6 +84,41 @@
             </form>
         </div>
     </section>
+    <section class="tron-panel" aria-labelledby="fee-skips-heading">
+        <div class="tron-panel__heading">
+            <div>
+                <p class="tron-eyebrow">TRX fee readiness</p>
+                <h2 id="fee-skips-heading">Token sweeps not queued</h2>
+            </div>
+            <a href="{% url 'admin:django_tron_payments_paymentauditevent_changelist' %}?event_type__exact=sweep.skipped">Audit events</a>
+        </div>
+        <p>
+            {{ insufficient_trx_event_count }} recorded fee checks found token wallets below
+            the configured <code>{{ configured.trc20_fee_limit_sun }}</code> SUN TRX requirement.
+            No treasury sweep record is created for these token transfers.
+        </p>
+        <div class="tron-table-wrap">
+            <table>
+                <thead>
+                    <tr><th>Time</th><th>Wallet</th><th>Asset</th><th>TRX balance (SUN)</th><th>Required (SUN)</th></tr>
+                </thead>
+                <tbody>
+                    {% for event in recent_insufficient_trx_events %}
+                    <tr>
+                        <td>{{ event.created_at|date:"Y-m-d H:i" }}</td>
+                        <td><code>{{ event.wallet.address }}</code></td>
+                        <td>{{ event.metadata.asset_code }}</td>
+                        <td>{{ event.metadata.trx_balance_sun }}</td>
+                        <td>{{ event.metadata.required_trx_sun }}</td>
+                    </tr>
+                    {% empty %}
+                    <tr><td colspan="5" class="tron-empty">No token sweep has been skipped for insufficient TRX.</td></tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </section>
+
 
     <div class="tron-columns">
         <section class="tron-panel" aria-labelledby="asset-heading">

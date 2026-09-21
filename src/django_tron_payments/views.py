@@ -13,7 +13,12 @@ from django.views.decorators.http import require_POST
 
 from django_tron_payments.conf import get_tron_settings
 from django_tron_payments.constants import PaymentStatus, SweepStatus
-from django_tron_payments.models import IncomingPayment, ManagedWallet, TreasurySweep
+from django_tron_payments.models import (
+    IncomingPayment,
+    ManagedWallet,
+    PaymentAuditEvent,
+    TreasurySweep,
+)
 from django_tron_payments.tasks import (
     broadcast_tron_sweeps,
     confirm_tron_sweeps,
@@ -36,6 +41,11 @@ def operations_dashboard(request):
     configured = get_tron_settings()
     stale_before = timezone.now() - timedelta(hours=24)
     confirmed_payments = IncomingPayment.objects.filter(status=PaymentStatus.CONFIRMED)
+    fee_skipped_events = PaymentAuditEvent.objects.filter(
+        wallet__network=configured.network,
+        event_type="sweep.skipped",
+        metadata__reason="insufficient_trx_for_fee",
+    ).select_related("wallet").order_by("-created_at")
     context = {
         "title": "TRON payment operations",
         "configured": configured,
@@ -58,6 +68,8 @@ def operations_dashboard(request):
             status__in=(SweepStatus.BUILDING, SweepStatus.BROADCAST),
             updated_at__lt=stale_before,
         ).count(),
+        "insufficient_trx_event_count": fee_skipped_events.count(),
+        "recent_insufficient_trx_events": fee_skipped_events[:10],
         "recent_payments": confirmed_payments.filter(network=configured.network).select_related(
             "wallet", "wallet__user"
         )[:10],

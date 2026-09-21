@@ -1,16 +1,34 @@
 # Configuration Reference
 
-`django-tron-payments` is a custodial-payment package. All secret values belong in a secret manager or environment-derived settings module, never in source control.
+`django-tron-payments` is a custodial-payment package. Complete the prerequisites and set the selected network before running migrations or creating wallets. Keep every secret in a secret manager or environment-derived settings module, never in source control.
 
-## Required settings
+## 1. Prerequisites before migration
+
+1. Create a TronGrid account and obtain an API key for the selected network.
+2. Create and independently verify a treasury address on that same network.
+3. Verify every TRC-20 contract address and its decimals for that network.
+4. Generate and securely store the wallet-encryption key. For development-only Fernet setup:
+
+   ```bash
+   python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+   ```
+
+5. Configure the settings below, then run `python manage.py check`.
+6. Only after the checks pass, run `python manage.py migrate`.
+
+## 2. Required settings
 
 ```python
+import os
+
 TRON_PAYMENTS = {
     "NETWORK": "nile",
     "TRONGRID_API_KEY": os.environ["TRONGRID_API_KEY"],
     "TREASURY_ADDRESS": os.environ["TRON_TREASURY_ADDRESS"],
     "ENCRYPTION_BACKEND": "django_tron_payments.crypto.fernet.FernetKeyCipher",
-    "ENCRYPTION_OPTIONS": {"FERNET_KEYS": [os.environ["TRON_KEY_ENCRYPTION_KEY"]]},
+    "ENCRYPTION_OPTIONS": {
+        "FERNET_KEYS": [os.environ["TRON_WALLET_ENCRYPTION_KEY"]],
+    },
     "ASSETS": [
         {
             "CODE": "USDT",
@@ -20,16 +38,21 @@ TRON_PAYMENTS = {
             "MINIMUM_DEPOSIT_ATOMIC": 1_000_000,
         },
     ],
+    "TRX_SWEEP_RESERVE_SUN": 1_000_000,
+    "TRC20_FEE_LIMIT_SUN": 3_000_000,
+    "POLL_PAGE_SIZE": 100,
+    "REQUEST_TIMEOUT_SECONDS": 15,
+    "TASK_RETRY_LIMIT": 5,
 }
 ```
 
-TRX is always supported and uses 6 decimal places / SUN atomic units. Add only token contracts you have independently verified for the selected network. A token symbol alone is not a safe identity.
+`TRON_PAYMENTS` must be a dictionary. `NETWORK` must be `nile`, `shasta`, or `mainnet`. `TRONGRID_API_KEY` and `TREASURY_ADDRESS` are required strings. Numeric values must be Python integers; use `int(os.environ[...])` when reading numeric environment variables. TRX is always enabled and must not be repeated in `ASSETS`.
 
-## Key-custody backends
+TRX uses six decimal places and SUN atomic units: `1 TRX = 1,000,000 SUN`. A TRC-20 amount uses the smallest unit defined by its configured `DECIMALS`. The contract address, decimals, and minimum amount must be verified independently for the selected network.
 
-The default Fernet backend accepts an ordered `FERNET_KEYS` list. The first key encrypts new wallets; all keys may decrypt existing wallets, enabling staged key rotation.
+## 3. Key custody
 
-For KMS/HSM custody, point `ENCRYPTION_BACKEND` at an importable class that implements:
+The default Fernet backend accepts an ordered `FERNET_KEYS` list. The first key encrypts new wallets; all keys may decrypt existing wallets, which supports staged rotation. For production, use a reviewed KMS/HSM-compatible backend:
 
 ```python
 class CustomKeyCipher:
@@ -37,11 +60,11 @@ class CustomKeyCipher:
     def decrypt(self, token: str) -> bytes: ...
 ```
 
-The custom backend must use authenticated encryption, restrict decryption authority to Celery workers that need it, never log plaintext, and implement tested key rotation.
+The backend must use authenticated encryption, restrict decryption authority to workers that need it, never log plaintext or private keys, and implement tested key rotation and recovery procedures.
 
-## Celery Beat
+## 4. Celery Beat
 
-Use a schedule such as:
+Configure the host project after Django settings and migrations are ready. Run one Beat scheduler instance only:
 
 ```python
 from celery.schedules import crontab
@@ -66,8 +89,13 @@ CELERY_BEAT_SCHEDULE = {
 }
 ```
 
-The sweep schedule runs five times per day. The explicit receipt-confirmation task runs more frequently, including after an ambiguous broadcast response.
+Start the host worker and Beat separately:
 
-## Fee policies
+```bash
+celery -A your_project worker -l INFO
+celery -A your_project beat -l INFO
+```
 
-`TRX_SWEEP_RESERVE_SUN` keeps native TRX in each wallet to fund outbound transactions. `TRC20_FEE_LIMIT_SUN` is both a per-token-transfer fee ceiling and the minimum TRX balance required before the package queues a token sweep. Fund deposit wallets with TRX deliberately or operate an approved gas-sponsorship mechanism outside this package.
+## 5. Fee and reserve policy
+
+`TRX_SWEEP_RESERVE_SUN` is retained when sweeping native TRX. `TRC20_FEE_LIMIT_SUN` is both the TRC-20 transaction fee ceiling and the minimum TRX balance required for token sweep planning. If a token wallet is below that threshold, no `TreasurySweep` is created; the service records one idempotent `sweep.skipped` audit event for the current balance/threshold pair. The operations dashboard displays the latest skipped checks.
