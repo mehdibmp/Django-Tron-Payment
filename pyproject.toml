@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "django-tron-payments"
-version = "0.1.0"
+version = "1.0.1"
 description = "Reusable, custodial TRON payment processing for Django using TronGrid."
 readme = "README.md"
 requires-python = ">=3.11.9"
